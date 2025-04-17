@@ -1,0 +1,210 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <title>Crop Image</title>
+  <!-- <script src="https://docs.opencv.org/4.x/opencv.js" type="text/javascript"></script> -->
+  
+  <style>
+    body { font-family: sans-serif; padding: 20px; }
+    canvas { border: 1px solid #ccc; display: block; margin-top: 10px; }
+    .slider-group { margin-top: 20px; }
+    label { display: inline-block; width: 80px; }
+    input[type="range"] { width: 300px; }
+  </style>
+</head>
+<body>
+  <h2>Auto-Cropped Image with Adjustable Size</h2>
+
+  <div class="slider-group">
+    <label for="width">Width:</label>
+    <input type="range" id="width" min="200" value="300">
+    <span id="widthVal">300</span>px
+  </div>
+  <div class="slider-group">
+    <label for="height">Height:</label>
+    <input type="range" id="height" min="150" value="300">
+    <span id="heightVal">300</span>px
+  </div>
+  <h3>Result</h3>
+  <canvas id="canvas"></canvas>
+  <div id="result" style="margin-top: 20px;">        
+  </div>
+
+  <!-- Original
+  <br>
+  <img id="originalImg" width="100%"/> -->
+  <script>
+    const query = new URLSearchParams(window.location.search);
+    const imgPath = query.get("img");
+    const fullImagePath = "/uploads/" + imgPath;
+  
+    // const originalImg = document.getElementById("originalImg");
+    // originalImg.src = fullImagePath;
+    const canvas = document.getElementById("canvas");
+    const ctx = canvas.getContext("2d");
+  
+    const widthSlider = document.getElementById("width");
+    const heightSlider = document.getElementById("height");
+    const widthVal = document.getElementById("widthVal");
+    const heightVal = document.getElementById("heightVal");
+  
+    const cascadeFile = 'haarcascade_frontalface_default.xml';
+    const cascadeUrl = 'https://raw.githubusercontent.com/opencv/opencv/master/data/haarcascades/haarcascade_frontalface_default.xml';
+  
+    const img = new Image();
+    img.crossOrigin = "anonymous";
+    //img.src = fullImagePath;
+    
+    function loadCascade(filename, fileurl, onloadCallback) {
+      let xhr = new XMLHttpRequest();
+      xhr.open('GET', fileurl, true);
+      xhr.responseType = 'arraybuffer';
+      xhr.onload = function () {
+        if (this.status === 200) {
+          let data = new Uint8Array(this.response);
+          cv.FS_createDataFile('/', filename, data, true, false, false);
+          onloadCallback();
+        } else {
+          console.error('Failed to load cascade file');
+        }
+      };
+      xhr.send();
+    }
+  
+    function detectFacesAndCrop(imgEl, width, height) {
+        // Resize image just for detection
+        const detectWidth = Math.min(1000, imgEl.naturalWidth);
+        const scaleFactor = detectWidth / imgEl.naturalWidth;
+
+        const scaledHeight = Math.round(imgEl.naturalHeight * scaleFactor);
+        const src = cv.imread(img);
+        const tempCanvas = document.createElement("canvas");
+        tempCanvas.width = detectWidth;
+        tempCanvas.height = scaledHeight;
+        const tempCtx = tempCanvas.getContext("2d");
+        tempCtx.drawImage(imgEl, 0, 0, detectWidth, scaledHeight);
+
+        const smallMat = cv.imread(tempCanvas);
+        const gray = new cv.Mat();
+        cv.cvtColor(smallMat, gray, cv.COLOR_RGBA2GRAY,0);
+
+        const faces = new cv.RectVector();
+        const faceCascade = new cv.CascadeClassifier();
+        faceCascade.load(cascadeFile);
+        var msize = new cv.Size(0, 0);
+        faceCascade.detectMultiScale(gray, faces, 1.1, 3, 0,msize,msize);
+        
+        const boostRegions = [];
+        for (let i = 0; i < faces.size(); i++) {
+            const face = faces.get(i);
+            boostRegions.push({
+              x: face.x / scaleFactor,
+              y: face.y / scaleFactor,
+              width: face.width / scaleFactor,
+              height: face.height / scaleFactor,
+              weight: 10.0
+            });
+        }
+        console.log("boostRegions",boostRegions)
+        SmartCrop.crop(imgEl, {
+            width,
+            height,
+            boost: boostRegions,
+            minScale: 1,
+            ruleOfThirds: true,
+            debug: true
+        }).then(result => {
+            const crop = result.topCrop;
+            canvas.width = width;
+            canvas.height = height;
+            ctx.drawImage(
+            imgEl,
+            crop.x, crop.y, crop.width, crop.height,
+            0, 0, width, height
+            );
+
+            let sortedResult = result.crops.sort((a,b)=>a.score.total>b.score.total ? -1 : 1);
+            console.log("sortedResult",sortedResult)
+            const label = document.createElement("span"); 
+            label.innerHTML = "<h3>Other Results</h3>"
+            document.getElementById("result").innerHTML = "";
+            document.getElementById("result").appendChild(label)
+            for(let i=1; i< Math.min(sortedResult.length, 8); i++){
+                const crop = sortedResult[i];
+                let canvas = document.createElement("canvas");
+                canvas.width = width;
+                canvas.height = height;
+                let ctx = canvas.getContext("2d");
+                ctx.drawImage(
+                    imgEl,
+                    crop.x, crop.y, crop.width, crop.height,
+                    0, 0, width, height
+                );
+                document.getElementById("result").appendChild(canvas);
+            }
+        });
+
+        smallMat.delete(); gray.delete(); faces.delete(); faceCascade.delete();
+    }
+
+  
+    function updateCrop() {
+      const w = parseInt(widthSlider.value);
+      const h = parseInt(heightSlider.value);
+      widthVal.textContent = w;
+      heightVal.textContent = h;
+  
+      detectFacesAndCrop(img, w, h);
+    }
+  
+    async function openCvReady() {
+      
+      if (typeof cv === 'undefined') {
+        console.error('OpenCV.js not loaded');
+        return;
+      }
+      cv=await cv;
+      console.log('OpenCV loaded');
+      loadCascade(cascadeFile, cascadeUrl, function () {
+        console.log('Cascade loaded');
+        img.onload = () => {
+            console.log("Image loaded");
+          const maxW = img.naturalWidth;
+          const maxH = img.naturalHeight;
+  
+          widthSlider.max = maxW;
+          heightSlider.max = maxH;
+  
+          if (parseInt(widthSlider.value) > maxW) widthSlider.value = Math.floor(maxW / 2);
+          if (parseInt(heightSlider.value) > maxH) heightSlider.value = Math.floor(maxH / 2);
+  
+          widthVal.textContent = widthSlider.value;
+          heightVal.textContent = heightSlider.value;
+  
+          widthSlider.addEventListener("input", updateCrop);
+          heightSlider.addEventListener("input", updateCrop);
+  
+          updateCrop(); // initial draw
+        };
+        img.src = fullImagePath;
+      });
+    
+  }
+  
+    window.openCvReady = openCvReady;
+  </script>
+  
+  <!-- <script
+  async
+  src="https://unpkg.com/opencv.js@1.2.1/opencv.js"
+  integrity="sha384-ucXOxPgA5tSKdaZgFD+5C0lAJeavjW31veENhNvOwsTjgx8waDD0s1QcMdUxhlxk"
+  crossorigin="anonymous"
+  onload="openCvReady()">
+  </script> -->
+ <!-- <script  async   src="https://docs.opencv.org/3.4/opencv.js"  onload="openCvReady()"></script> -->
+ <script  async   src="https://docs.opencv.org/4.x/opencv.js"  onload="openCvReady()"></script>
+
+  <script src="https://cdn.jsdelivr.net/npm/smartcrop@2.0.5/smartcrop.min.js"></script>
+  
+</body>
+</html>
