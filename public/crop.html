@@ -25,6 +25,8 @@
     <input type="range" id="height" min="150" value="300">
     <span id="heightVal">300</span>px
   </div>
+  <h3>original image</h3>
+  <img id="imgOrigin" crossorigin="anonymous" width="300px"/>
   <h3>Result</h3>
   <canvas id="canvas"></canvas>
   <div id="result" style="margin-top: 20px;">        
@@ -33,11 +35,112 @@
   <!-- Original
   <br>
   <img id="originalImg" width="100%"/> -->
+
+    
+
+<script>
+  async function setupTFJS() {
+    await faceapi.tf.setBackend('cpu');
+    //await faceapi.tf.setBackend('webgl'); // or 'cpu', but make sure it's supported
+    await faceapi.tf.ready();
+    faceapi.tf.enableProdMode();
+    console.log('TFJS using CPU backend');
+  }
+  async function loadModels() {
+    const modelPath = '/models'; // <-- adjust if hosted elsewhere
+    await faceapi.nets.ssdMobilenetv1.loadFromUri(modelPath);
+    await faceapi.nets.faceLandmark68Net.loadFromUri(modelPath);
+    await faceapi.nets.faceRecognitionNet.loadFromUri(modelPath);
+    await faceapi.nets.tinyFaceDetector.loadFromUri(modelPath)
+    // await faceapi.nets.tinyYolov2.loadFromUri(modelPath);
+    console.log("Models loaded!");
+  }
+  let faceMatcher;
+  window.addEventListener("load", async () => {
+    await setupTFJS();
+    await loadModels();
+
+    // then run your detection logic here
+    
+    await startDetectionCrop()
+  });
+  async function detectAndRecognizeFace(imgEl, width, height) {
+    const referenceImg = await faceapi.fetchImage('/known_faces/person1.jpg');
+    console.log("referenceImg",referenceImg.naturalWidth, referenceImg.naturalHeight)
+    const refDetections = await faceapi
+    .detectSingleFace(referenceImg, new faceapi.SsdMobilenetv1Options() ) //new faceapi.TinyFaceDetectorOptions({ inputSize: 512 }))//new faceapi.SsdMobilenetv1Options())
+    .withFaceLandmarks()
+    .withFaceDescriptor();
+
+    if (!refDetections) {
+      console.error("No face found in reference image!");
+      return;
+    }
+    console.log("Reference descriptor:", refDetections.descriptor);
+    const canvas = faceapi.createCanvasFromMedia(referenceImg);
+    faceapi.matchDimensions(canvas, {
+      width: referenceImg.width,
+      height: referenceImg.height
+    });
+    document.body.appendChild(canvas);
+    faceapi.draw.drawDetections(canvas, refDetections);
+    console.log("Visual debug detection results:", refDetections);
+
+    const labeledDescriptors = [new faceapi.LabeledFaceDescriptors("John", [refDetections.descriptor])];
+    faceMatcher = new faceapi.FaceMatcher(labeledDescriptors, 0.6);
+
+    const detections = await faceapi
+        .detectAllFaces(imgEl)
+        .withFaceLandmarks()
+        .withFaceDescriptors();
+
+      if (!detections.length) {
+        console.warn("No faces detected!");
+        return;
+      }
+      detections.forEach(detection => {
+        const dist = faceapi.euclideanDistance(detection.descriptor, refDetections.descriptor);
+        console.log("distance",dist)
+        if (dist < 0.6) {
+          console.log("Match found!");
+          // draw or prioritize this face
+        }
+      });
+      console.log("detections",detections)
+      const bestMatch = faceMatcher.findBestMatch(detections[0].descriptor);
+      console.log("Best match:", bestMatch.toString(),bestMatch);
+
+      if (bestMatch.label !== "unknown") {
+        // Use SmartCrop (optional) to crop the matching face area
+        const box = detections[0].detection.box;
+        const cropCanvas = document.getElementById("canvas");
+        const ctx = cropCanvas.getContext("2d");
+        cropCanvas.width = width;
+        cropCanvas.height = height;
+
+        ctx.drawImage(
+          imgEl,
+          box.x, box.y, box.width, box.height,
+          0, 0, width, height
+        );
+      }
+    }
+
+  async  function startDetectionCrop() {
+      const w = parseInt(widthSlider.value);
+      const h = parseInt(heightSlider.value);
+      widthVal.textContent = w;
+      heightVal.textContent = h;
+      const img = document.getElementById("imgOrigin")
+      await detectAndRecognizeFace(img, w, h)
+      
+  }
+</script>
   <script>
     const query = new URLSearchParams(window.location.search);
     const imgPath = query.get("img");
     const fullImagePath = "/uploads/" + imgPath;
-  
+    document.getElementById("imgOrigin").src = fullImagePath;
     // const originalImg = document.getElementById("originalImg");
     // originalImg.src = fullImagePath;
     const canvas = document.getElementById("canvas");
@@ -153,12 +256,11 @@
       const h = parseInt(heightSlider.value);
       widthVal.textContent = w;
       heightVal.textContent = h;
-  
-      detectFacesAndCrop(img, w, h);
+      //detectFacesAndCrop(img, w, h);
     }
   
     async function openCvReady() {
-      
+
       if (typeof cv === 'undefined') {
         console.error('OpenCV.js not loaded');
         return;
@@ -194,7 +296,7 @@
     window.openCvReady = openCvReady;
   </script>
   
-  <!-- <script
+<!-- <script
   async
   src="https://unpkg.com/opencv.js@1.2.1/opencv.js"
   integrity="sha384-ucXOxPgA5tSKdaZgFD+5C0lAJeavjW31veENhNvOwsTjgx8waDD0s1QcMdUxhlxk"
@@ -204,7 +306,10 @@
  <!-- <script  async   src="https://docs.opencv.org/3.4/opencv.js"  onload="openCvReady()"></script> -->
  <script  async   src="https://docs.opencv.org/4.x/opencv.js"  onload="openCvReady()"></script>
 
-  <script src="https://cdn.jsdelivr.net/npm/smartcrop@2.0.5/smartcrop.min.js"></script>
-  
+ <script src="https://cdn.jsdelivr.net/npm/smartcrop@2.0.5/smartcrop.min.js"></script>
+ <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@1.7.4"></script>
+ <script defer src="https://cdn.jsdelivr.net/npm/face-api.js@0.22.2/dist/face-api.min.js"></script>
+
+
 </body>
 </html>
