@@ -40,101 +40,218 @@
 
 <script>
   async function setupTFJS() {
-    await faceapi.tf.setBackend('cpu');
-    //await faceapi.tf.setBackend('webgl'); // or 'cpu', but make sure it's supported
-    await faceapi.tf.ready();
-    faceapi.tf.enableProdMode();
-    console.log('TFJS using CPU backend');
-  }
-  async function loadModels() {
-    const modelPath = '/models'; // <-- adjust if hosted elsewhere
-    await faceapi.nets.ssdMobilenetv1.loadFromUri(modelPath);
-    await faceapi.nets.faceLandmark68Net.loadFromUri(modelPath);
-    await faceapi.nets.faceRecognitionNet.loadFromUri(modelPath);
-    await faceapi.nets.tinyFaceDetector.loadFromUri(modelPath)
-    // await faceapi.nets.tinyYolov2.loadFromUri(modelPath);
-    console.log("Models loaded!");
-  }
-  let faceMatcher;
-  window.addEventListener("load", async () => {
-    await setupTFJS();
-    await loadModels();
-
-    // then run your detection logic here
-    
-    await startDetectionCrop()
-  });
-  async function detectAndRecognizeFace(imgEl, width, height) {
-    const referenceImg = await faceapi.fetchImage('/known_faces/person1.jpg');
-    console.log("referenceImg",referenceImg.naturalWidth, referenceImg.naturalHeight)
-    const refDetections = await faceapi
-    .detectSingleFace(referenceImg, new faceapi.SsdMobilenetv1Options() ) //new faceapi.TinyFaceDetectorOptions({ inputSize: 512 }))//new faceapi.SsdMobilenetv1Options())
-    .withFaceLandmarks()
-    .withFaceDescriptor();
-
-    if (!refDetections) {
-      console.error("No face found in reference image!");
-      return;
+    // Try WebGL first for better performance, then fall back to CPU if needed
+    try {
+      await faceapi.tf.setBackend('webgl');
+      console.log('TFJS using WebGL backend');
+    } catch (e) {
+      await faceapi.tf.setBackend('cpu');
+      console.log('TFJS using CPU backend (fallback)');
     }
-    console.log("Reference descriptor:", refDetections.descriptor);
-    const canvas = faceapi.createCanvasFromMedia(referenceImg);
-    faceapi.matchDimensions(canvas, {
-      width: referenceImg.width,
-      height: referenceImg.height
+    await faceapi.tf.ready();
+  }
+
+  async function loadModels() {
+    try {
+      const modelPath = '/models'; // Adjust if needed
+      
+      // Show loading status
+      console.log('Loading face detection models...');
+      
+      // Load models sequentially to avoid memory issues
+      await faceapi.nets.ssdMobilenetv1.loadFromUri(modelPath);
+      console.log('✓ SSD MobileNet loaded');
+      
+      await faceapi.nets.faceLandmark68Net.loadFromUri(modelPath);
+      console.log('✓ Face Landmark model loaded');
+      
+      await faceapi.nets.faceRecognitionNet.loadFromUri(modelPath);
+      console.log('✓ Face Recognition model loaded');
+      
+      await faceapi.nets.tinyFaceDetector.loadFromUri(modelPath);
+      console.log('✓ Tiny Face Detector loaded');
+      
+      console.log("All models loaded successfully!");
+      return true;
+    } catch (error) {
+      console.error("Error loading models:", error);
+      return false;
+    }
+  }
+
+  let faceMatcher;
+
+  // Helper function to ensure image is fully loaded
+  function ensureImageLoaded(imgEl) {
+    return new Promise((resolve) => {
+      if (imgEl.complete && imgEl.naturalHeight !== 0) {
+        resolve(imgEl);
+      } else {
+        imgEl.onload = () => resolve(imgEl);
+      }
     });
-    document.body.appendChild(canvas);
-    faceapi.draw.drawDetections(canvas, refDetections);
-    console.log("Visual debug detection results:", refDetections);
+  }
 
-    const labeledDescriptors = [new faceapi.LabeledFaceDescriptors("John", [refDetections.descriptor])];
-    faceMatcher = new faceapi.FaceMatcher(labeledDescriptors, 0.6);
+  // Debug helper to show image data
+  function debugImageElement(img, label) {
+    console.log(`${label} dimensions:`, {
+      width: img.width,
+      height: img.height,
+      naturalWidth: img.naturalWidth,
+      naturalHeight: img.naturalHeight,
+      complete: img.complete
+    });
+  }
 
-    const detections = await faceapi
-        .detectAllFaces(imgEl)
-        .withFaceLandmarks()
-        .withFaceDescriptors();
-
-      if (!detections.length) {
-        console.warn("No faces detected!");
+  async function detectAndRecognizeFace(imgEl, width, height) {
+    try {
+      // Ensure input image is fully loaded
+      imgEl = await ensureImageLoaded(imgEl);
+      debugImageElement(imgEl, "Input image");
+      
+      // Load reference image
+      console.log("Loading reference image...");
+      const referenceImg = await faceapi.fetchImage('/known_faces/shbm1.jpeg');
+      debugImageElement(referenceImg, "Reference image");
+      
+      if (referenceImg.naturalWidth === 0 || referenceImg.naturalHeight === 0) {
+        console.error("Reference image failed to load properly!");
         return;
       }
-      detections.forEach(detection => {
-        const dist = faceapi.euclideanDistance(detection.descriptor, refDetections.descriptor);
-        console.log("distance",dist)
-        if (dist < 0.6) {
-          console.log("Match found!");
-          // draw or prioritize this face
-        }
-      });
-      console.log("detections",detections)
-      const bestMatch = faceMatcher.findBestMatch(detections[0].descriptor);
-      console.log("Best match:", bestMatch.toString(),bestMatch);
-
-      if (bestMatch.label !== "unknown") {
-        // Use SmartCrop (optional) to crop the matching face area
-        const box = detections[0].detection.box;
-        const cropCanvas = document.getElementById("canvas");
-        const ctx = cropCanvas.getContext("2d");
-        cropCanvas.width = width;
-        cropCanvas.height = height;
-
-        ctx.drawImage(
-          imgEl,
-          box.x, box.y, box.width, box.height,
-          0, 0, width, height
-        );
-      }
-    }
-
-  async  function startDetectionCrop() {
-      const w = parseInt(widthSlider.value);
-      const h = parseInt(heightSlider.value);
-      widthVal.textContent = w;
-      heightVal.textContent = h;
-      const img = document.getElementById("imgOrigin")
-      await detectAndRecognizeFace(img, w, h)
       
+      // Create a debug canvas for the reference image
+      const debugCanvas = faceapi.createCanvasFromMedia(referenceImg);
+      document.body.appendChild(debugCanvas);
+      const debugCtx = debugCanvas.getContext('2d');
+      debugCtx.drawImage(referenceImg, 0, 0);
+      
+      console.log("Detecting face in reference image...");
+      const detectionOptions = new faceapi.SsdMobilenetv1Options({ 
+        minConfidence: 0.5,
+        maxResults: 1
+      });
+      
+      const refDetections = await faceapi
+        .detectSingleFace(referenceImg)
+        .withFaceLandmarks()
+        .withFaceDescriptor();
+      
+      if (!refDetections) {
+        console.error("No face found in reference image!");
+        return;
+      }
+      
+      console.log("Reference face detected:", refDetections);
+      console.log("Reference descriptor:", refDetections.descriptor);
+      
+      // Visualize the detection on reference image
+      const canvas = faceapi.createCanvasFromMedia(referenceImg);
+      faceapi.matchDimensions(canvas, {
+        width: referenceImg.naturalWidth,
+        height: referenceImg.naturalHeight
+      });
+      document.body.appendChild(canvas);
+      faceapi.draw.drawDetections(canvas, refDetections);
+      faceapi.draw.drawFaceLandmarks(canvas, refDetections);
+      
+      // Create face matcher with reference face
+      const labeledDescriptors = [
+        new faceapi.LabeledFaceDescriptors("Person1", [refDetections.descriptor])
+      ];
+      faceMatcher = new faceapi.FaceMatcher(labeledDescriptors, 0.6);
+      
+      // Detect faces in the target image
+      console.log("Detecting faces in target image...");
+      const detections = await faceapi
+        .detectAllFaces(imgEl, detectionOptions)
+        .withFaceLandmarks()
+        .withFaceDescriptors();
+      
+      if (!detections.length) {
+        console.warn("No faces detected in target image!");
+        return;
+      }
+      
+      console.log(`Found ${detections.length} faces in target image:`, detections);
+      
+      // Process each detected face
+      for (let i = 0; i < detections.length; i++) {
+        const detection = detections[i];
+        const dist = faceapi.euclideanDistance(detection.descriptor, refDetections.descriptor);
+        console.log(`Face #${i+1} distance:`, dist);
+        
+        const bestMatch = faceMatcher.findBestMatch(detection.descriptor);
+        console.log(`Face #${i+1} best match:`, bestMatch.toString());
+        
+        if (bestMatch.label !== "unknown" && bestMatch.distance < 0.6) {
+          console.log(`Match found for face #${i+1}!`);
+          
+          // Crop the matching face
+          const box = detection.detection.box;
+          const cropCanvas = document.getElementById("canvas") || document.createElement("canvas");
+          if (!document.getElementById("canvas")) {
+            cropCanvas.id = "canvas";
+            document.body.appendChild(cropCanvas);
+          }
+          
+          const ctx = cropCanvas.getContext("2d");
+          cropCanvas.width = width;
+          cropCanvas.height = height;
+          
+          ctx.drawImage(
+            imgEl,
+            box.x, box.y, box.width, box.height,
+            0, 0, width, height
+          );
+        }
+      }
+    } catch (error) {
+      console.error("Error in face detection:", error);
+    }
   }
+
+  async function startDetectionCrop() {
+    try {
+      const w = parseInt(widthSlider.value || 300);
+      const h = parseInt(heightSlider.value || 300);
+      
+      if (document.getElementById("widthVal")) {
+        document.getElementById("widthVal").textContent = w;
+      }
+      if (document.getElementById("heightVal")) {
+        document.getElementById("heightVal").textContent = h;
+      }
+      
+      const img = document.getElementById("imgOrigin");
+      if (!img) {
+        console.error("Target image element not found!");
+        return;
+      }
+      
+      await detectAndRecognizeFace(img, w, h);
+    } catch (error) {
+      console.error("Error starting detection:", error);
+    }
+  }
+
+  window.addEventListener("load", async () => {
+    try {
+      console.log("Setting up TensorFlow.js...");
+      await setupTFJS();
+      
+      console.log("Loading face-api.js models...");
+      const modelsLoaded = await loadModels();
+      
+      if (modelsLoaded) {
+        console.log("Ready to detect faces!");
+        await startDetectionCrop();
+      } else {
+        console.error("Failed to load models, face detection will not work.");
+      }
+    } catch (error) {
+      console.error("Error initializing face detection:", error);
+    }
+  });
 </script>
   <script>
     const query = new URLSearchParams(window.location.search);
