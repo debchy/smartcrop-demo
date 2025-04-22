@@ -51,22 +51,6 @@
     }
     await faceapi.tf.ready();
   }
-  // async function setupTFJS() {
-  //   await faceapi.tf.setBackend('cpu');
-  //   //await faceapi.tf.setBackend('webgl'); // or 'cpu', but make sure it's supported
-  //   await faceapi.tf.ready();
-  //   faceapi.tf.enableProdMode();
-  //   console.log('TFJS using CPU backend');
-  // }
-  // async function loadModels() {
-  //   const modelPath = '/models'; // <-- adjust if hosted elsewhere
-  //   await faceapi.nets.ssdMobilenetv1.loadFromUri(modelPath);
-  //   await faceapi.nets.faceLandmark68Net.loadFromUri(modelPath);
-  //   await faceapi.nets.faceRecognitionNet.loadFromUri(modelPath);
-  //   await faceapi.nets.tinyFaceDetector.loadFromUri(modelPath)
-  //   // await faceapi.nets.tinyYolov2.loadFromUri(modelPath);
-  //   console.log("Models loaded!");
-  // }
   async function loadModels() {
     try {
       const modelPath = '/models'; // Adjust if needed
@@ -94,7 +78,9 @@
       return false;
     }
   }
+
   let faceMatcher;
+
   // Helper function to ensure image is fully loaded
   function ensureImageLoaded(imgEl) {
     return new Promise((resolve) => {
@@ -105,6 +91,7 @@
       }
     });
   }
+
   // Debug helper to show image data
   function debugImageElement(img, label) {
     console.log(`${label} dimensions:`, {
@@ -121,17 +108,17 @@
       // Ensure input image is fully loaded
       imgEl = await ensureImageLoaded(imgEl);
       debugImageElement(imgEl, "Input image");
-
+      
       // Load reference image
       console.log("Loading reference image...");
-      const referenceImg = await faceapi.fetchImage('/known_faces/person2.jpg');
+      const referenceImg = await faceapi.fetchImage('/known_faces/shbm1.jpeg');
       debugImageElement(referenceImg, "Reference image");
       
       if (referenceImg.naturalWidth === 0 || referenceImg.naturalHeight === 0) {
         console.error("Reference image failed to load properly!");
         return;
       }
-
+      
       // Create a debug canvas for the reference image
       const debugCanvas = faceapi.createCanvasFromMedia(referenceImg);
       document.body.appendChild(debugCanvas);
@@ -145,7 +132,7 @@
       });
       
       const refDetections = await faceapi
-        .detectSingleFace(referenceImg, detectionOptions)
+        .detectSingleFace(referenceImg)
         .withFaceLandmarks()
         .withFaceDescriptor();
       
@@ -153,10 +140,10 @@
         console.error("No face found in reference image!");
         return;
       }
-
+      
       console.log("Reference face detected:", refDetections);
       console.log("Reference descriptor:", refDetections.descriptor);
-
+      
       // Visualize the detection on reference image
       const canvas = faceapi.createCanvasFromMedia(referenceImg);
       faceapi.matchDimensions(canvas, {
@@ -166,27 +153,27 @@
       document.body.appendChild(canvas);
       faceapi.draw.drawDetections(canvas, refDetections);
       faceapi.draw.drawFaceLandmarks(canvas, refDetections);
-
+      
       // Create face matcher with reference face
       const labeledDescriptors = [
         new faceapi.LabeledFaceDescriptors("Person1", [refDetections.descriptor])
       ];
       faceMatcher = new faceapi.FaceMatcher(labeledDescriptors, 0.6);
-
+      
       // Detect faces in the target image
       console.log("Detecting faces in target image...");
       const detections = await faceapi
         .detectAllFaces(imgEl, detectionOptions)
         .withFaceLandmarks()
         .withFaceDescriptors();
-
+      
       if (!detections.length) {
         console.warn("No faces detected in target image!");
         return;
       }
-
+      
       console.log(`Found ${detections.length} faces in target image:`, detections);
-    
+      
       // Process each detected face
       for (let i = 0; i < detections.length; i++) {
         const detection = detections[i];
@@ -218,13 +205,10 @@
           );
         }
       }
-    }
-    catch (error) {
+    } catch (error) {
       console.error("Error in face detection:", error);
     }
-
   }
-
 
   async function startDetectionCrop() {
     try {
