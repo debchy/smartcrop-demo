@@ -1,0 +1,344 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Face Recognition with face-api.js</title>
+  <style>
+    body {
+      margin: 0;
+      padding: 0;
+      width: 100vw;
+      height: 100vh;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      font-family: Arial, sans-serif;
+    }
+    .container {
+      position: relative;
+      margin: 20px;
+    }
+    canvas {
+      position: absolute;
+      top: 0;
+      left: 0;
+    }
+    .controls {
+      margin: 20px 0;
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+    }
+    .status {
+      margin-top: 20px;
+      padding: 10px;
+      background-color: #f0f0f0;
+      border-radius: 5px;
+      min-width: 300px;
+    }
+    button {
+      padding: 8px 16px;
+      background-color: #4CAF50;
+      color: white;
+      border: none;
+      border-radius: 4px;
+      cursor: pointer;
+      margin: 5px;
+    }
+    button:hover {
+      background-color: #45a049;
+    }
+    input[type="file"] {
+      margin: 10px 0;
+    }
+    .face-name {
+      margin-top: 10px;
+      display: flex;
+      align-items: center;
+    }
+  </style>
+</head>
+<body>
+  <h1>Face Recognition with face-api.js</h1>
+  
+  <div class="container">
+    <video id="video" width="640" height="480" autoplay muted></video>
+    <canvas id="overlay" width="640" height="480"></canvas>
+  </div>
+  
+  <div class="controls">
+    <button id="startBtn">Start Camera</button>
+    <button id="stopBtn" disabled>Stop Camera</button>
+    
+    <div class="face-name">
+      <input type="text" id="nameInput" placeholder="Enter person's name">
+      <button id="addFaceBtn" disabled>Add Current Face</button>
+    </div>
+    
+    <div>
+      <input type="file" id="faceUpload" accept="image/*">
+      <input type="text" id="uploadNameInput" placeholder="Name for uploaded face">
+      <button id="processFaceBtn">Process Uploaded Face</button>
+    </div>
+  </div>
+  
+  <div class="status" id="status">Status: Loading models...</div>
+
+  <!-- Import face-api.js from CDN -->
+   
+  <script defer src="https://cdn.jsdelivr.net/npm/face-api.js@0.22.2/dist/face-api.min.js"></script>
+  
+  <script>
+    // DOM elements
+    const video = document.getElementById('video');
+    const overlay = document.getElementById('overlay');
+    const ctx = overlay.getContext('2d');
+    const startBtn = document.getElementById('startBtn');
+    const stopBtn = document.getElementById('stopBtn');
+    const addFaceBtn = document.getElementById('addFaceBtn');
+    const nameInput = document.getElementById('nameInput');
+    const statusDisplay = document.getElementById('status');
+    const faceUpload = document.getElementById('faceUpload');
+    const uploadNameInput = document.getElementById('uploadNameInput');
+    const processFaceBtn = document.getElementById('processFaceBtn');
+    
+    // App state
+    let isModelLoaded = false;
+    let isCameraRunning = false;
+    let recognitionInterval = null;
+    let labeledFaceDescriptors = [];
+    let faceMatcher = null;
+    
+    // Load required models
+    async function loadModels() {
+      try {
+        statusDisplay.textContent = "Status: Loading models...";
+        
+        // Load models from the CDN
+        await Promise.all([
+          faceapi.nets.tinyFaceDetector.loadFromUri('/models'),
+          faceapi.nets.faceLandmark68Net.loadFromUri('/models'),
+          faceapi.nets.faceRecognitionNet.loadFromUri('/models'),
+          faceapi.nets.faceExpressionNet.loadFromUri('/models'),
+          faceapi.nets.ssdMobilenetv1.loadFromUri('/models')
+        ]);
+        
+        isModelLoaded = true;
+        statusDisplay.textContent = "Status: Models loaded successfully! Ready to start camera.";
+        startBtn.disabled = false;
+      } catch (error) {
+        statusDisplay.textContent = `Status: Error loading models: ${error.message}`;
+        console.error("Error loading models:", error);
+      }
+    }
+    
+    // Start webcam
+    async function startCamera() {
+      if (!isModelLoaded) {
+        statusDisplay.textContent = "Status: Models not loaded yet. Please wait.";
+        return;
+      }
+      
+      try {
+        const stream = await navigator.mediaDevices.getUserMedia({ video: {} });
+        video.srcObject = stream;
+        
+        isCameraRunning = true;
+        startBtn.disabled = true;
+        stopBtn.disabled = false;
+        addFaceBtn.disabled = false;
+        
+        statusDisplay.textContent = "Status: Camera started. Ready for face detection.";
+        
+        // Start face detection
+        startFaceDetection();
+      } catch (error) {
+        statusDisplay.textContent = `Status: Camera error: ${error.message}`;
+        console.error("Error accessing camera:", error);
+      }
+    }
+    
+    // Stop webcam
+    function stopCamera() {
+      if (!isCameraRunning) return;
+      
+      const stream = video.srcObject;
+      const tracks = stream.getTracks();
+      tracks.forEach(track => track.stop());
+      video.srcObject = null;
+      
+      isCameraRunning = false;
+      startBtn.disabled = false;
+      stopBtn.disabled = true;
+      addFaceBtn.disabled = true;
+      
+      // Clear detection interval
+      if (recognitionInterval) {
+        clearInterval(recognitionInterval);
+        recognitionInterval = null;
+      }
+      
+      // Clear canvas
+      ctx.clearRect(0, 0, overlay.width, overlay.height);
+      
+      statusDisplay.textContent = "Status: Camera stopped.";
+    }
+    
+    // Start face detection and recognition
+    function startFaceDetection() {
+      if (recognitionInterval) {
+        clearInterval(recognitionInterval);
+      }
+      
+      recognitionInterval = setInterval(async () => {
+        if (!isCameraRunning) return;
+        
+        // Detect faces
+        const detections = await faceapi.detectAllFaces(video, 
+          new faceapi.TinyFaceDetectorOptions())
+          .withFaceLandmarks()
+          .withFaceExpressions()
+          .withFaceDescriptors();
+        
+        // Clear canvas before drawing new detection results
+        ctx.clearRect(0, 0, overlay.width, overlay.height);
+        
+        // Resize detections to match display size
+        const displaySize = { width: video.width, height: video.height };
+        const resizedDetections = faceapi.resizeResults(detections, displaySize);
+        
+        // Draw detections
+        faceapi.draw.drawDetections(overlay, resizedDetections);
+        faceapi.draw.drawFaceLandmarks(overlay, resizedDetections);
+        faceapi.draw.drawFaceExpressions(overlay, resizedDetections);
+        
+        // Perform face recognition if we have labeled descriptors
+        if (faceMatcher && detections.length > 0) {
+          resizedDetections.forEach(detection => {
+            const box = detection.detection.box;
+            const drawBox = new faceapi.draw.DrawBox(box, { 
+              label: 'Detecting...' 
+            });
+            
+            // Find best match
+            const bestMatch = faceMatcher.findBestMatch(detection.descriptor);
+            const newBox = new faceapi.draw.DrawBox(box, { 
+              label: bestMatch.toString()
+            });
+            newBox.draw(overlay);
+          });
+        }
+      }, 100);
+    }
+    
+    // Add current face with name
+    async function addCurrentFace() {
+      if (!isCameraRunning || !nameInput.value.trim()) {
+        statusDisplay.textContent = "Status: Please start camera and enter a name.";
+        return;
+      }
+      
+      try {
+        statusDisplay.textContent = "Status: Processing face...";
+        
+        // Detect face with highest confidence
+        const detections = await faceapi
+          .detectAllFaces(video, new faceapi.TinyFaceDetectorOptions())
+          .withFaceLandmarks()
+          .withFaceDescriptors();
+        
+        if (detections.length === 0) {
+          statusDisplay.textContent = "Status: No face detected. Please try again.";
+          return;
+        }
+        
+        // Use the first face detected (with highest confidence)
+        const detection = detections[0];
+        const name = nameInput.value.trim();
+        
+        // Create labeled face descriptor
+        const labeledDescriptor = new faceapi.LabeledFaceDescriptors(
+          name,
+          [detection.descriptor]
+        );
+        
+        // Add to our collection
+        labeledFaceDescriptors.push(labeledDescriptor);
+        
+        // Update face matcher
+        faceMatcher = new faceapi.FaceMatcher(labeledFaceDescriptors);
+        
+        statusDisplay.textContent = `Status: Added face for "${name}"`;
+        nameInput.value = '';
+      } catch (error) {
+        statusDisplay.textContent = `Status: Error adding face: ${error.message}`;
+        console.error("Error adding face:", error);
+      }
+    }
+    
+    // Process uploaded face image
+    async function processUploadedFace() {
+      const fileInput = faceUpload;
+      const name = uploadNameInput.value.trim();
+      
+      if (!fileInput.files || fileInput.files.length === 0 || !name) {
+        statusDisplay.textContent = "Status: Please select an image and enter a name.";
+        return;
+      }
+      
+      try {
+        statusDisplay.textContent = "Status: Processing uploaded face...";
+        
+        // Create an image element
+        const img = await faceapi.bufferToImage(fileInput.files[0]);
+        
+        // Detect faces in the image
+        const detections = await faceapi
+          .detectAllFaces(img, new faceapi.SsdMobilenetv1Options())
+          .withFaceLandmarks()
+          .withFaceDescriptors();
+        
+        if (detections.length === 0) {
+          statusDisplay.textContent = "Status: No face detected in the uploaded image.";
+          return;
+        }
+        console.log("detections",detections)
+        // Use the first face
+        const detection = detections[0];
+        
+        // Create labeled face descriptor
+        const labeledDescriptor = new faceapi.LabeledFaceDescriptors(
+          name,
+          [detection.descriptor]
+        );
+        
+        // Add to our collection
+        labeledFaceDescriptors.push(labeledDescriptor);
+        
+        // Update face matcher
+        faceMatcher = new faceapi.FaceMatcher(labeledFaceDescriptors);
+        
+        statusDisplay.textContent = `Status: Added face for "${name}" from uploaded image.`;
+        uploadNameInput.value = '';
+        fileInput.value = '';
+      } catch (error) {
+        statusDisplay.textContent = `Status: Error processing image: ${error.message}`;
+        console.error("Error processing image:", error);
+      }
+    }
+    
+    // Initialize app
+    window.addEventListener('load', () => {
+      loadModels();
+      
+      // Setup event listeners
+      startBtn.addEventListener('click', startCamera);
+      stopBtn.addEventListener('click', stopCamera);
+      addFaceBtn.addEventListener('click', addCurrentFace);
+      processFaceBtn.addEventListener('click', processUploadedFace);
+    });
+  </script>
+</body>
+</html>
